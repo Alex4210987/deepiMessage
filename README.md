@@ -27,6 +27,6 @@ python main.py
 
 ## TODO
 
-- Use deepseek api to answer questions
-- Use websearch api
+- Use deepseek or other LLMs to answer questions
+- Integrate with websearch
 - Set schedules and reminders
