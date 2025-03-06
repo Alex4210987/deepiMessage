@@ -9,7 +9,6 @@ install the following dependencies:
 ```bash
 pip install sqlite3
 pip install typedstream
-pip install python-dotenv
 ```
 
 run main.py
