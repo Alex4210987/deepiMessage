@@ -21,7 +21,7 @@ python main.py
 ## Features
 
 - Send iMessages:
-  A apple script will be executed to send iMessages to the target user.
+  An AppleScript will be executed to send iMessages to the target user.
 - Receive iMessages:
   The SQLite database will be queried to get the latest iMessages received.
 
