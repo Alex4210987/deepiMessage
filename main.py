@@ -2,7 +2,8 @@ import asyncio
 import aiosqlite
 import os
 import time
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
+import random
 from dotenv import load_dotenv
 from typedstream.stream import TypedStreamReader
 import platform
@@ -27,25 +28,45 @@ DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-chat") # Added default va
 # Reminder Schedule (可自定义提示词)
 REMINDER_SCHEDULE = [
     {
-        "time": "09:00",
-        "prompt": "请生成一条温馨的早餐提醒，并鼓励用户开始一天的学习和工作。要求：用中文，亲切自然，60字以内。"
+        "time": "08:50",
+        "prompt": "生成自然唤醒提示，建议起床学习。要求：中文配五言诗句开头，50字以内。"
     },
     {
-        "time": "12:00",
-        "prompt": "请生成一条午餐提醒，建议健康饮食并适当休息。要求：用中文，轻松幽默，50字左右。"
+        "time": "10:00",
+        "prompt": "补水时间提醒，建议饮用温水并活动肩颈。要求：中文押韵口诀，40字左右。"
     },
     {
-        "time": "18:00",
-        "prompt": "请生成一条晚餐提醒，建议适量饮食并锻炼身体。要求：用中文，温暖关切，50字以内。"
+        "time": "13:15",
+        "prompt": "餐后养生提醒，建议仙人揉腹法教学。要求：中文步骤说明，60字以内。"
     },
     {
-        "time": "23:30",
-        "prompt": "请生成一条睡前提醒，建议放下手机保证睡眠，用诗意的中文表达，40字以内。"
+        "time": "16:20",
+        "prompt": "黄昏能量提醒，建议锻炼身体。要求：中文带励志名言引用，55字以内。"
+    },
+    {
+        "time": "20:45",
+        "prompt": "数码排毒提醒，建议纸质书阅读时段。要求：中文诗意表达，带诗歌意象。"
+    },
+    {
+        "time": "21:10",
+        "prompt": "足浴养生提醒，建议中药泡脚配方。要求：中医术语通俗化，50字左右。"
+    },
+    {
+        "time": "23:00",
+        "prompt": "生物钟校准提醒，建议478呼吸法指导。要求：中文步骤可视化描述，60字以内。"
     }
 ]
 
 # Track sent reminders
 last_sent_dates = {}
+
+# Work hours configuration
+WORK_START_HOUR = 9  # 9:00 AM
+WORK_END_HOUR = 18  # 6:00 PM
+STUDY_CHECK_INTERVAL_MINUTES = 60  # Check every hour
+STUDY_CHECK_PROMPT = "给出一段话，询问对方进展，鼓励对方好好学习。要求：中文，100字以内"
+LAST_STUDY_CHECK_TIME = None  # Initialize last study check time
+MESSAGE_WINDOW = 10  # Collect messages within this many seconds
 
 def is_mac():
     return platform.system() == 'Darwin'
@@ -134,7 +155,7 @@ async def generate_response(prompt):
 async def fetch_new_messages(phone_numbers, database_path, scan_interval):
     """Fetches new messages from the database."""
     SQL_QUERY = f"""
-    SELECT T1.ROWID, T1.text, T1.attributedBody, T3.chat_identifier
+    SELECT T1.ROWID, T1.text, T1.attributedBody, T3.chat_identifier, T1.date
     FROM message T1
     INNER JOIN chat_message_join T2 ON T1.ROWID = T2.message_id
     INNER JOIN chat T3 ON T2.chat_id = T3.ROWID
@@ -152,38 +173,95 @@ async def fetch_new_messages(phone_numbers, database_path, scan_interval):
         print(f"Database error: {e}")
         return []
 
-async def process_message(message, config):
-    """Processes a single message."""
-    rowid, text, attributed_body, chat_identifier = message
-    content = text or decode_attributed_body(attributed_body)
 
-    if not content:
-        if DEBUG:
-            print(f"Skipping empty message: {rowid}")
+async def process_messages(messages, config):
+    """Processes a batch of messages, combining them into a single prompt."""
+    if not messages:
         return
 
-    use_ai = os.getenv("USE_AI", "False").lower() == "true"
-    if use_ai:
-        print(f"Received message: {content[:100]}...")
-        response = await generate_response(content)
+    # Group messages by chat_identifier
+    grouped_messages = {}
+    for rowid, text, attributed_body, chat_identifier, timestamp in messages:
+        if chat_identifier not in grouped_messages:
+            grouped_messages[chat_identifier] = []
+        grouped_messages[chat_identifier].append((rowid, text, attributed_body, timestamp))
 
-        if response:
-            print(f"Generated response: {response[:100]}...")
-            if REPLY_TO_SENDER: # Check the new env variable
-                await send_message_applescript(
-                    chat_identifier, # Send it back to the original sender
-                    response,
-                    config['applescript_path']
-                )
+    use_ai = os.getenv("USE_AI", "False").lower() == "true"
+    if not use_ai:
+        return
+
+    for chat_identifier, message_list in grouped_messages.items():
+        # Sort messages by timestamp
+        message_list.sort(key=lambda x: x[3])
+
+        # Collect messages within the MESSAGE_WINDOW
+        prompt_messages = []
+        last_message_time = None
+        combined_content = ""
+
+        for rowid, text, attributed_body, timestamp in message_list:
+            content = text or decode_attributed_body(attributed_body)
+            if not content:
+                if DEBUG:
+                    print(f"Skipping empty message: {rowid}")
+                continue
+
+            message_time = datetime.fromtimestamp(timestamp / 1000000000)  # Convert timestamp to datetime
+
+            if last_message_time is None or (message_time - last_message_time).total_seconds() <= MESSAGE_WINDOW:
+                combined_content += f"\n{content}"
+                last_message_time = message_time
             else:
-                for number in config['phone_numbers']:
+                # Process the previous combined content
+                if combined_content:
+                    print(f"Received combined message: {combined_content[:100]}...")
+                    response = await generate_response(combined_content)
+
+                    if response:
+                        print(f"Generated response: {response[:100]}...")
+                        if REPLY_TO_SENDER:
+                            await send_message_applescript(
+                                chat_identifier,  # Send it back to the original sender
+                                response,
+                                config['applescript_path']
+                            )
+                        else:
+                            for number in config['phone_numbers']:
+                                await send_message_applescript(
+                                    number,
+                                    response,
+                                    config['applescript_path']
+                                )
+                    else:
+                        print("Failed to generate response")
+
+                # Start a new combined content with the current message
+                combined_content = content
+                last_message_time = message_time
+
+        # Process any remaining combined content
+        if combined_content:
+            print(f"Received combined message: {combined_content[:100]}...")
+            response = await generate_response(combined_content)
+
+            if response:
+                print(f"Generated response: {response[:100]}...")
+                if REPLY_TO_SENDER:
                     await send_message_applescript(
-                        number,
+                        chat_identifier,  # Send it back to the original sender
                         response,
                         config['applescript_path']
                     )
-        else:
-            print("Failed to generate response")
+                else:
+                    for number in config['phone_numbers']:
+                        await send_message_applescript(
+                            number,
+                            response,
+                            config['applescript_path']
+                        )
+            else:
+                print("Failed to generate response")
+
 
 async def check_reminders():
     """Check and send scheduled reminders."""
@@ -201,6 +279,42 @@ async def check_reminders():
                     print(f"Sent {reminder['time']} reminder")
                 else:
                     print(f"Failed to generate {reminder['time']} reminder")
+
+
+async def check_study_time():
+    """Randomly check if the person is studying during work hours."""
+    global LAST_STUDY_CHECK_TIME
+    now = datetime.now()
+    current_hour = now.hour
+
+    # Check if it's within work hours
+    if WORK_START_HOUR <= current_hour < WORK_END_HOUR:
+        # Only check if enough time has passed since the last check
+        if LAST_STUDY_CHECK_TIME is None or (now - LAST_STUDY_CHECK_TIME) >= timedelta(minutes=STUDY_CHECK_INTERVAL_MINUTES):
+            # Generate a random check time within the next hour
+            next_check_time = now + timedelta(minutes=random.randint(1, STUDY_CHECK_INTERVAL_MINUTES))
+
+            # Calculate the delay until the next check
+            delay = (next_check_time - now).total_seconds()
+
+            print(f"Next study check in {delay:.0f} seconds.")
+
+            await asyncio.sleep(delay)
+
+            print("Checking if studying...")
+            response = await generate_response(STUDY_CHECK_PROMPT)
+            if response:
+                for number in PHONE_NUMBERS:
+                    await send_message_applescript(number, response, APPLESCRIPT_PATH)
+                print("Sent study check prompt.")
+            else:
+                print("Failed to generate study check prompt.")
+
+            LAST_STUDY_CHECK_TIME = datetime.now()  # Update the last check time
+        else:
+            # It hasn't been long enough since the last check, so skip this time
+            print("Skipping study check, not enough time has passed since the last check.")
+
 
 async def main():
     """Main function."""
@@ -230,11 +344,13 @@ async def main():
 
             if messages:
                 print(f"Found {len(messages)} new messages")
-                for msg in messages:
-                    await process_message(msg, config)
+                await process_messages(messages, config) # Pass the list of messages
 
             # Check scheduled reminders
             await check_reminders()
+
+            # Check study time
+            await check_study_time()
 
             await asyncio.sleep(SCAN_INTERVAL)
 
