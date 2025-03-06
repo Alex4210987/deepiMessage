@@ -7,8 +7,7 @@ A Python applocation for sending and receiving iMessages on macOS.
 install the following dependencies:
 
 ```bash
-pip install sqlite3
-pip install typedstream
+pip install python-dotenv aiosqlite pytypedstream
 ```
 
 run main.py
