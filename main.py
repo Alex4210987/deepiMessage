@@ -2,10 +2,7 @@ import subprocess
 import sqlite3
 import os
 import time
-from dotenv import load_dotenv
 from typedstream.stream import TypedStreamReader
-
-# load_dotenv()
 
 # Configuration loaded from .env file
 DATABASE_PATH = os.path.expanduser(os.getenv("DATABASE_PATH", "~/Library/Messages/chat.db"))
