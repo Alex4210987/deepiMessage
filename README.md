@@ -1,6 +1,6 @@
 # deepiMessage
 
-A Python library for sending and receiving iMessages on macOS. 
+A Python applocation for sending and receiving iMessages on macOS. 
 
 ## Usage
 
