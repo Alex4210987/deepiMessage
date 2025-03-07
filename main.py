@@ -163,7 +163,7 @@ async def generate_response(prompt):
 
     data["model"] = DEEPSEEK_FALLBACK_MODEL  # Switch to fallback model
     # timeout limit: 90s
-    async with httpx.AsyncClient(timeout=90.0) as client:
+    async with httpx.AsyncClient(timeout=900.0) as client:
         try:
             response = await client.post(api_url, headers=headers, json=data, timeout=30)
             response.raise_for_status()
