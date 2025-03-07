@@ -28,7 +28,7 @@ DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-chat") # Added default va
 # Reminder Schedule (可自定义提示词)
 REMINDER_SCHEDULE = [
     {
-        "time": "08:50",
+        "time": "08:55",
         "prompt": "生成自然唤醒提示，建议起床学习。要求：中文配五言诗句开头，50字以内。"
     },
     {
