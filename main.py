@@ -23,7 +23,8 @@ REPLY_TO_SENDER = os.getenv("REPLY_TO_SENDER", "True").lower() == "true" # Add t
 # DeepSeek Configuration
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
 DEEPSEEK_BASE_URL = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com") # Added default value
-DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-chat") # Added default value
+DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-reasoner") # Added default value
+DEEPSEEK_FALLBACK_MODEL = "deepseek-chat"
 
 # Reminder Schedule (可自定义提示词)
 REMINDER_SCHEDULE = [
@@ -64,9 +65,12 @@ last_sent_dates = {}
 WORK_START_HOUR = 9  # 9:00 AM
 WORK_END_HOUR = 18  # 6:00 PM
 STUDY_CHECK_INTERVAL_MINUTES = 60  # Check every hour
-STUDY_CHECK_PROMPT = "给出一段话，询问对方进展，鼓励对方好好学习。要求：中文，100字以内"
+STUDY_CHECK_PROMPT = "给出一段话，询问在学什么，鼓励对方好好学习。要求：中文，100字以内"
 LAST_STUDY_CHECK_TIME = None  # Initialize last study check time
 MESSAGE_WINDOW = 10  # Collect messages within this many seconds
+
+# Global flag to indicate if message processing is ongoing
+processing_messages = False
 
 def is_mac():
     return platform.system() == 'Darwin'
@@ -113,12 +117,12 @@ async def send_message_applescript(recipient, message, applescript_path):
 
 
 async def generate_response(prompt):
-    """Generates a response using the DeepSeek API asynchronously using httpx."""
+    """Generates a response using the DeepSeek API asynchronously with retry logic and fallback model."""
     if not DEEPSEEK_API_KEY:
         print("Error: Missing DEEPSEEK_API_KEY in .env file")
         return None
 
-    url = f"{DEEPSEEK_BASE_URL}/v1/chat/completions"
+    api_url = f"{DEEPSEEK_BASE_URL}/chat/completions"
     headers = {
         "Content-Type": "application/json",
         "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
@@ -134,23 +138,39 @@ async def generate_response(prompt):
         "max_tokens": int(os.getenv("MAX_TOKENS", "1000")),
     }
 
-    async with httpx.AsyncClient() as client:
-        try:
-            response = await client.post(url, headers=headers, json=data, timeout=30)
-            response.raise_for_status()  # Raise HTTPError for bad responses (4xx or 5xx)
-            return response.json()["choices"][0]["message"]["content"]
-        except httpx.HTTPStatusError as e:
-            print(f"DeepSeek API Error: HTTPStatusError - {e}")
-            if DEBUG:
-                print(f"Response content: {e.response.content.decode()}") # Print response content for debugging
-            return None
-        except httpx.RequestError as e:
-            print(f"DeepSeek API Error: RequestError - {e}")
-            return None
-        except Exception as e:
-            print(f"DeepSeek API Error: General Exception - {e}")
-            return None
+    retries = 1  # Reduced retries for deepseek-reasoner
+    for attempt in range(retries):
+        async with httpx.AsyncClient() as client:
+            try:
+                response = await client.post(api_url, headers=headers, json=data, timeout=30)
+                response.raise_for_status()  # Raise HTTPError for bad responses (4xx or 5xx)
+                return response.json()["choices"][0]["message"]["content"]
+            except httpx.HTTPStatusError as e:
+                print(f"DeepSeek API Error: HTTPStatusError - {e}")
+                if DEBUG:
+                    print(f"Response content: {e.response.content.decode()}")  # Print response content for debugging
+                return None
+            except httpx.RequestError as e:
+                print(f"DeepSeek API Error: RequestError - Attempt {attempt + 1}/{retries} using {DEEPSEEK_MODEL}- {e}")
+                if attempt < retries - 1:  # Don't wait after the last attempt
+                    await asyncio.sleep(2 ** attempt)  # Exponential backoff
+            except Exception as e:
+                print(f"DeepSeek API Error: General Exception - {e}")
+                return None
 
+    # If deepseek-reasoner fails, try deepseek-chat once
+    print(f"{DEEPSEEK_MODEL} failed after {retries} attempts.  Trying {DEEPSEEK_FALLBACK_MODEL}.")
+
+    data["model"] = DEEPSEEK_FALLBACK_MODEL  # Switch to fallback model
+    # timeout limit: 90s
+    async with httpx.AsyncClient(timeout=90.0) as client:
+        try:
+            response = await client.post(api_url, headers=headers, json=data, timeout=30)
+            response.raise_for_status()
+            return response.json()["choices"][0]["message"]["content"]
+        except Exception as e:  # Catch all exceptions for the fallback attempt
+            print(f"DeepSeek API Error: {DEEPSEEK_FALLBACK_MODEL} failed: {e}")
+            return None
 
 async def fetch_new_messages(phone_numbers, database_path, scan_interval):
     """Fetches new messages from the database."""
@@ -176,6 +196,7 @@ async def fetch_new_messages(phone_numbers, database_path, scan_interval):
 
 async def process_messages(messages, config):
     """Processes a batch of messages, combining them into a single prompt."""
+
     if not messages:
         return
 
@@ -261,6 +282,7 @@ async def process_messages(messages, config):
                         )
             else:
                 print("Failed to generate response")
+    processing_messages = False  # Reset the flag when done
 
 
 async def check_reminders():
@@ -282,35 +304,34 @@ async def check_reminders():
 
 
 async def check_study_time():
-    """Randomly check if the person is studying during work hours."""
+    """Randomly check if the person is studying during work hours with a probability.
+    If triggered, sends immediately without delay.
+    """
     global LAST_STUDY_CHECK_TIME
     now = datetime.now()
     current_hour = now.hour
+    probability = 1 / 20  # Set the probability (1/100 in this case)
 
     # Check if it's within work hours
     if WORK_START_HOUR <= current_hour < WORK_END_HOUR:
         # Only check if enough time has passed since the last check
         if LAST_STUDY_CHECK_TIME is None or (now - LAST_STUDY_CHECK_TIME) >= timedelta(minutes=STUDY_CHECK_INTERVAL_MINUTES):
-            # Generate a random check time within the next hour
-            next_check_time = now + timedelta(minutes=random.randint(1, STUDY_CHECK_INTERVAL_MINUTES))
+            # Generate a random number between 0 and 1
+            if random.random() < probability:
+                # The random number is less than the probability, so proceed with the check *immediately*
+                print("Checking if studying...")
+                response = await generate_response(STUDY_CHECK_PROMPT)
+                if response:
+                    for number in PHONE_NUMBERS:
+                        await send_message_applescript(number, response, APPLESCRIPT_PATH)
+                    print("Sent study check prompt.")
+                else:
+                    print("Failed to generate study check prompt.")
 
-            # Calculate the delay until the next check
-            delay = (next_check_time - now).total_seconds()
-
-            print(f"Next study check in {delay:.0f} seconds.")
-
-            await asyncio.sleep(delay)
-
-            print("Checking if studying...")
-            response = await generate_response(STUDY_CHECK_PROMPT)
-            if response:
-                for number in PHONE_NUMBERS:
-                    await send_message_applescript(number, response, APPLESCRIPT_PATH)
-                print("Sent study check prompt.")
+                LAST_STUDY_CHECK_TIME = datetime.now()  # Update the last check time
             else:
-                print("Failed to generate study check prompt.")
-
-            LAST_STUDY_CHECK_TIME = datetime.now()  # Update the last check time
+                # The random number is greater than or equal to the probability, so skip the check
+                print("Skipping study check due to random probability.")
         else:
             # It hasn't been long enough since the last check, so skip this time
             print("Skipping study check, not enough time has passed since the last check.")
@@ -318,6 +339,8 @@ async def check_study_time():
 
 async def main():
     """Main function."""
+    global processing_messages
+
     if not PHONE_NUMBERS:
         print("Error: PHONE_NUMBERS must be configured.")
         return
@@ -335,7 +358,7 @@ async def main():
 
     try:
         while True:
-            # Process incoming messages
+            # Fetch and process incoming messages
             messages = await fetch_new_messages(
                 PHONE_NUMBERS,
                 DATABASE_PATH,
@@ -344,15 +367,20 @@ async def main():
 
             if messages:
                 print(f"Found {len(messages)} new messages")
-                await process_messages(messages, config) # Pass the list of messages
+                asyncio.create_task(process_messages(messages, config)) # Pass the list of messages
+            else:
+                print("No new messages at:", datetime.now().strftime("%H:%M:%S"))
 
             # Check scheduled reminders
             await check_reminders()
+            print("Checked reminders")
 
             # Check study time
             await check_study_time()
+            print("Checked study time")
 
-            await asyncio.sleep(SCAN_INTERVAL)
+            print("Wait for", SCAN_INTERVAL, "seconds")
+            time.sleep(SCAN_INTERVAL)
 
     except KeyboardInterrupt:
         print("Program exiting")
