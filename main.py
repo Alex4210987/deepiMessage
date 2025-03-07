@@ -30,19 +30,19 @@ DEEPSEEK_FALLBACK_MODEL = "deepseek-chat"
 REMINDER_SCHEDULE = [
     {
         "time": "08:55",
-        "prompt": "生成自然唤醒提示，建议起床学习。要求：中文配五言诗句开头，50字以内。"
+        "prompt": "生成自然唤醒提示，建议起床学习。要求：中文配五言诗句开头"
     },
     {
         "time": "10:00",
-        "prompt": "补水时间提醒，建议饮用温水并活动肩颈。要求：中文押韵口诀，40字左右。"
+        "prompt": "补水时间提醒，建议饮用温水并活动肩颈。要求：中文押韵口诀"
     },
     {
         "time": "13:15",
-        "prompt": "餐后养生提醒，建议仙人揉腹法教学。要求：中文步骤说明，60字以内。"
+        "prompt": "餐后养生提醒，建议仙人揉腹法教学。要求：中文步骤说明"
     },
     {
         "time": "16:20",
-        "prompt": "黄昏能量提醒，建议锻炼身体。要求：中文带励志名言引用，55字以内。"
+        "prompt": "黄昏能量提醒，建议锻炼身体。要求：中文带励志名言引用"
     },
     {
         "time": "20:45",
@@ -65,7 +65,7 @@ last_sent_dates = {}
 WORK_START_HOUR = 9  # 9:00 AM
 WORK_END_HOUR = 18  # 6:00 PM
 STUDY_CHECK_INTERVAL_MINUTES = 60  # Check every hour
-STUDY_CHECK_PROMPT = "给出一段话，询问在学什么，鼓励对方好好学习。要求：中文，100字以内"
+STUDY_CHECK_PROMPT = "给出一段话，询问在学什么，鼓励对方好好学习。要求：中文"
 LAST_STUDY_CHECK_TIME = None  # Initialize last study check time
 MESSAGE_WINDOW = 10  # Collect messages within this many seconds
 
@@ -142,7 +142,7 @@ async def generate_response(prompt):
     for attempt in range(retries):
         async with httpx.AsyncClient() as client:
             try:
-                response = await client.post(api_url, headers=headers, json=data, timeout=30)
+                response = await client.post(api_url, headers=headers, json=data, timeout=150)
                 response.raise_for_status()  # Raise HTTPError for bad responses (4xx or 5xx)
                 return response.json()["choices"][0]["message"]["content"]
             except httpx.HTTPStatusError as e:
@@ -163,9 +163,9 @@ async def generate_response(prompt):
 
     data["model"] = DEEPSEEK_FALLBACK_MODEL  # Switch to fallback model
     # timeout limit: 90s
-    async with httpx.AsyncClient(timeout=900.0) as client:
+    async with httpx.AsyncClient() as client:
         try:
-            response = await client.post(api_url, headers=headers, json=data, timeout=30)
+            response = await client.post(api_url, headers=headers, json=data, timeout=150)
             response.raise_for_status()
             return response.json()["choices"][0]["message"]["content"]
         except Exception as e:  # Catch all exceptions for the fallback attempt
